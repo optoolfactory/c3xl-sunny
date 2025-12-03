@@ -112,7 +112,7 @@ class Tici(HardwareBase):
 
   @cached_property
   def amplifier(self):
-    if self.get_device_type() == "mici":
+    if self.get_device_type() == "mici" or os.getenv("LITE"):
       return None
     return Amplifier()
 
@@ -211,6 +211,8 @@ class Tici(HardwareBase):
     return str(self.get_modem().Get(MM_MODEM, 'EquipmentIdentifier', dbus_interface=DBUS_PROPS, timeout=TIMEOUT))
 
   def get_network_info(self):
+    if self.get_device_type() == "mici" or os.getenv("LITE"):
+      return None
     try:
       modem = self.get_modem()
       info = modem.Command("AT+QNWINFO", math.ceil(TIMEOUT), dbus_interface=MM_MODEM, timeout=TIMEOUT)
@@ -314,6 +316,8 @@ class Tici(HardwareBase):
       return None
 
   def get_modem_temperatures(self):
+    if os.getenv("LITE"):
+      return []
     timeout = 0.2  # Default timeout is too short
     try:
       modem = self.get_modem()
@@ -563,8 +567,10 @@ class Tici(HardwareBase):
 
   def reset_internal_panda(self):
     gpio_init(GPIO.STM_RST_N, True)
+    gpio_init(GPIO.STM_BOOT0, True)
 
     gpio_set(GPIO.STM_RST_N, 1)
+    gpio_set(GPIO.STM_BOOT0, 0)
     time.sleep(1)
     gpio_set(GPIO.STM_RST_N, 0)
 
