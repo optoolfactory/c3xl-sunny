@@ -76,6 +76,7 @@ class SelfdriveD:
       ignore += ['roadCameraState', 'wideRoadCameraState']
     if os.getenv("DISABLE_DRIVER"):
       ignore += ['driverCameraState']
+    ignore += ['driverMonitoringState']
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'livePose', 'liveDelay',
                                    'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters',
