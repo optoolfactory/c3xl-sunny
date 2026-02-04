@@ -75,8 +75,8 @@ def enable_dm(started, params, CP: car.CarParams) -> bool:
 def enable_connect(started, params, CP: car.CarParams) -> bool:
   return params.get_int("EnableConnect") > 0
 
-#def c3x_lite(started: bool, params: Params, CP: car.CarParams) -> bool:
-  #return started and params.get_bool("HardwareC3xLite")
+def c3x_lite(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return started and params.get_bool("HardwareC3xLite")
 
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
@@ -138,7 +138,7 @@ procs = [
   PythonProcess("carrot_man", "selfdrive.carrot.carrot_man", always_run),#, enabled=not PC),
 
   # c3x lite
-  #PythonProcess("beep", "selfdrive.controls.beep", c3x_lite, enabled=TICI),
+  PythonProcess("beep", "selfdrive.controls.beep", c3x_lite, enabled=TICI),
 ]
 
 managed_processes = {p.name: p for p in procs}
