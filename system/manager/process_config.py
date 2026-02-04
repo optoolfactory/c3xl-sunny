@@ -126,6 +126,9 @@ procs = [
   PythonProcess("joystick", "tools.joystick.joystick_control", and_(joystick, iscar)),
 ]
 
+  # c3x lite
+  PythonProcess("beep", "selfdrive.controls.beep", always_run),  
+
 # FrogPilot variables
 if HARDWARE.get_device_type() == "mici":
   procs.append(PythonProcess("ui", "selfdrive.ui.ui", always_run))
