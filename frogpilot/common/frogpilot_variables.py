@@ -13,7 +13,7 @@ import cereal.messaging as messaging
 from cereal import car, custom, log
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.car_helpers import interfaces
-from opendbc.car.gm.values import GMFlags
+from opendbc.car.gm.values import CAR as GM_CAR, GMFlags
 from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.interfaces import TORQUE_SUBSTITUTE_PATH, CarInterfaceBase, GearShifter
 from opendbc.car.mock.values import CAR as MOCK
@@ -25,6 +25,7 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.latcontrol_torque import KP
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.system.hardware import HARDWARE
+from openpilot.system.hardware.hw import Paths
 from openpilot.system.hardware.power_monitoring import VBATT_PAUSE_CHARGING
 from openpilot.system.version import get_build_metadata
 
@@ -47,29 +48,39 @@ RESOURCES_REPO = "FrogAi/FrogPilot-Resources"
 
 ACTIVE_THEME_PATH = Path(BASEDIR) / "frogpilot/assets/active_theme"
 METADATAS_PATH = Path(BASEDIR) / "frogpilot/assets/model_metadata"
-MODELS_PATH = Path("/data/models")
 RANDOM_EVENTS_PATH = Path(BASEDIR) / "frogpilot/assets/random_events"
 STOCK_THEME_PATH = Path(BASEDIR) / "frogpilot/assets/stock_theme"
 THEME_COLORS_PATH = (ACTIVE_THEME_PATH / "colors/colors.json")
-THEME_SAVE_PATH = Path("/data/themes")
+if HARDWARE.get_device_type() == "pc":
+  _FP_PC_ROOT = Path(Paths.comma_home()) / "frogpilot"
+  _FP_DATA_ROOT = _FP_PC_ROOT / "data"
+  _FP_CACHE_ROOT = _FP_PC_ROOT / "cache"
+  _FP_PERSIST_ROOT = Path(Paths.persist_root())
+else:
+  _FP_DATA_ROOT = Path("/data")
+  _FP_CACHE_ROOT = Path("/cache")
+  _FP_PERSIST_ROOT = Path("/persist")
 
-ERROR_LOGS_PATH = Path("/data/error_logs")
-SCREEN_RECORDINGS_PATH = Path("/data/media/screen_recordings")
-VIDEO_CACHE_PATH = Path("/data/video_cache")
+MODELS_PATH = _FP_DATA_ROOT / "models"
+THEME_SAVE_PATH = _FP_DATA_ROOT / "themes"
 
-BACKUP_PATH = Path("/cache/on_backup")
-FROGPILOT_BACKUPS = Path("/data/backups")
-TOGGLE_BACKUPS = Path("/data/toggle_backups")
+ERROR_LOGS_PATH = _FP_DATA_ROOT / "error_logs"
+SCREEN_RECORDINGS_PATH = _FP_DATA_ROOT / "media/screen_recordings"
+VIDEO_CACHE_PATH = _FP_DATA_ROOT / "video_cache"
 
-FROGS_GO_MOO_PATH = Path("/persist/frogsgomoo.py")
+BACKUP_PATH = _FP_CACHE_ROOT / "on_backup"
+FROGPILOT_BACKUPS = _FP_DATA_ROOT / "backups"
+TOGGLE_BACKUPS = _FP_DATA_ROOT / "toggle_backups"
 
-HD_LOGS_PATH = Path("/data/media/0/realdata_HD")
-HD_PATH = Path("/cache/use_HD")
+FROGS_GO_MOO_PATH = _FP_PERSIST_ROOT / "frogsgomoo.py"
 
-KONIK_LOGS_PATH = Path("/data/media/0/realdata_konik")
-KONIK_PATH = Path("/cache/use_konik")
+HD_LOGS_PATH = _FP_DATA_ROOT / "media/0/realdata_HD"
+HD_PATH = _FP_CACHE_ROOT / "use_HD"
 
-MAPS_PATH = Path("/data/media/0/osm/offline")
+KONIK_LOGS_PATH = _FP_DATA_ROOT / "media/0/realdata_konik"
+KONIK_PATH = _FP_CACHE_ROOT / "use_konik"
+
+MAPS_PATH = _FP_DATA_ROOT / "media/0/osm/offline"
 
 NNFF_MODELS_PATH = Path(BASEDIR) / "frogpilot/assets/nnff_models"
 
@@ -247,6 +258,7 @@ class FrogPilotVariables:
     toggle.use_higher_bitrate &= not self.vetting_branch
     toggle.use_higher_bitrate |= self.development_branch
 
+    HD_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not HD_PATH.is_file() and toggle.use_higher_bitrate:
       HD_PATH.touch()
       HARDWARE.reboot()
@@ -256,8 +268,9 @@ class FrogPilotVariables:
 
     toggle.use_konik_server = device_management
     toggle.use_konik_server &= self.get_value("UseKonikServer")
-    toggle.use_konik_server |= Path("/data/openpilot/not_vetted").is_file()
+    toggle.use_konik_server |= (_FP_DATA_ROOT / "openpilot/not_vetted").is_file()
 
+    KONIK_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not KONIK_PATH.is_file() and toggle.use_konik_server:
       KONIK_PATH.touch()
       HARDWARE.reboot()
@@ -311,23 +324,27 @@ class FrogPilotVariables:
     toggle = self.frogpilot_toggles
     toggle.tuning_level = self.params.get("TuningLevel") if self.params.get_bool("TuningLevelConfirmed") else TUNING_LEVELS["ADVANCED"]
 
+    fallback_platform = GM_CAR.CHEVROLET_BOLT_EUV if HARDWARE.get_device_type() == "pc" else MOCK.MOCK
+
     msg_bytes = self.params.get("CarParams" if started else "CarParamsPersistent", block=started)
     if msg_bytes:
       CP = messaging.log_from_bytes(msg_bytes, car.CarParams)
+      car_platform = CP.carFingerprint if CP.carFingerprint in interfaces else fallback_platform
     else:
-      CP = interfaces[MOCK.MOCK].get_params(MOCK.MOCK, gen_empty_fingerprint(), [], False, False, False, toggle).as_reader()
+      car_platform = fallback_platform
+      CP = interfaces[car_platform].get_params(car_platform, gen_empty_fingerprint(), [], False, False, False, toggle).as_reader()
 
     is_torque_car = CP.lateralTuning.which() == "torque"
     if not is_torque_car:
       CP_builder = CP.as_builder()
-      CarInterfaceBase.configure_torque_tune(MOCK.MOCK, CP_builder.lateralTuning)
+      CarInterfaceBase.configure_torque_tune(car_platform, CP_builder.lateralTuning)
       CP = CP_builder.as_reader()
 
     fpmsg_bytes = self.params.get("FrogPilotCarParams" if started else "FrogPilotCarParamsPersistent", block=started)
     if fpmsg_bytes:
       FPCP = messaging.log_from_bytes(fpmsg_bytes, custom.FrogPilotCarParams)
     else:
-      FPCP = interfaces[MOCK.MOCK].get_frogpilot_params(MOCK.MOCK, gen_empty_fingerprint(), [], CP, toggle)
+      FPCP = interfaces[car_platform].get_frogpilot_params(car_platform, gen_empty_fingerprint(), [], CP, toggle)
 
     alpha_longitudinal = CP.alphaLongitudinalAvailable
     toggle.car_make = CP.brand

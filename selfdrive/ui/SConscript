@@ -11,6 +11,8 @@ if arch == 'larch64':
   base_libs.append('EGL')
 
 if arch == "Darwin":
+  if "OmxCore" in base_libs:
+    base_libs.remove("OmxCore")
   del base_libs[base_libs.index('OpenCL')]
   qt_env['FRAMEWORKS'] += ['OpenCL']
 

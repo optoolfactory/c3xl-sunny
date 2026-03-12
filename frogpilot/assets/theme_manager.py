@@ -58,6 +58,10 @@ class ThemeManager:
 
     self.theme_sizes_path = THEME_SAVE_PATH / "theme_sizes.json"
 
+    # Ensure theme storage layout exists on desktop and device alike.
+    (THEME_SAVE_PATH / "theme_packs").mkdir(parents=True, exist_ok=True)
+    (THEME_SAVE_PATH / "steering_wheels").mkdir(parents=True, exist_ok=True)
+
     self.theme_sizes = load_json_file(self.theme_sizes_path)
 
     self.session = requests.Session()
@@ -511,12 +515,17 @@ class ThemeManager:
     print(f"Linked {save_location} to {asset_location}")
 
   def update_theme_params(self, downloadable_colors, downloadable_distance_icons, downloadable_icons, downloadable_signals, downloadable_sounds, downloadable_wheels):
+    theme_packs_dir = THEME_SAVE_PATH / "theme_packs"
+    steering_wheels_dir = THEME_SAVE_PATH / "steering_wheels"
+    theme_packs_dir.mkdir(parents=True, exist_ok=True)
+    steering_wheels_dir.mkdir(parents=True, exist_ok=True)
+
     def update_param(key, assets, subfolder):
       if subfolder == "steering_wheels":
-        themes_path = THEME_SAVE_PATH / subfolder
+        themes_path = steering_wheels_dir
         existing_assets = {self.format_name(item.name, "steering_wheels") for item in themes_path.glob("*") if item.is_file()}
       else:
-        themes_path = THEME_SAVE_PATH / "theme_packs"
+        themes_path = theme_packs_dir
         existing_assets = {self.format_name(item.parent.name, subfolder) for item in themes_path.glob(f"*/{subfolder}") if item.is_dir()}
 
       self.params.put(key, ",".join(sorted(set(assets) - existing_assets)))
@@ -530,7 +539,7 @@ class ThemeManager:
     update_param("DownloadableWheels", downloadable_wheels, "steering_wheels")
 
     downloaded_themes = {}
-    for theme_dir in (THEME_SAVE_PATH / "theme_packs").iterdir():
+    for theme_dir in theme_packs_dir.iterdir():
       components = []
       for component in ["colors", "distance_icons", "icons", "signals", "sounds"]:
         if (theme_dir / component).is_dir():
@@ -541,7 +550,7 @@ class ThemeManager:
         downloaded_themes[theme_name] = sorted(components)
 
     downloaded_wheels = []
-    for wheel_file in (THEME_SAVE_PATH / "steering_wheels").iterdir():
+    for wheel_file in steering_wheels_dir.iterdir():
       if wheel_file.is_file():
         downloaded_wheels.append(self.format_name(wheel_file.name, "steering_wheels"))
 
@@ -672,8 +681,11 @@ class ThemeManager:
         self.download_theme("steering_wheels", file_stem, THEME_COMPONENT_PARAMS["steering_wheels"], frogpilot_toggles)
         self.update_active_theme(True, frogpilot_toggles)
 
+    protected_dirs = {THEME_SAVE_PATH / "theme_packs", THEME_SAVE_PATH / "steering_wheels"}
     for dir_path in THEME_SAVE_PATH.glob("**/*"):
       if dir_path.is_dir() and not any(dir_path.iterdir()):
+        if dir_path in protected_dirs:
+          continue
         print(f"Deleting empty folder: {dir_path}")
         delete_file(dir_path)
       elif dir_path.is_file() and dir_path.name.startswith("tmp"):

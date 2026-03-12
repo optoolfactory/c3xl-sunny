@@ -577,14 +577,33 @@ class GuiApplication:
       return False
 
   def _load_fonts(self):
-    for font_weight_file in FontWeight:
-      with as_file(FONT_DIR) as fspath:
+    self._ensure_font_atlases()
+    with as_file(FONT_DIR) as fspath:
+      for font_weight_file in FontWeight:
         fnt_path = fspath / font_weight_file
         font = rl.load_font(fnt_path.as_posix())
         if font_weight_file != FontWeight.UNIFONT:
           rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
         self._fonts[font_weight_file] = font
     rl.gui_set_font(self._fonts[FontWeight.NORMAL])
+
+  def _ensure_font_atlases(self):
+    with as_file(FONT_DIR) as fspath:
+      required_fonts = [fspath / fw.value for fw in FontWeight]
+      missing_fonts = [font_path.name for font_path in required_fonts if not font_path.exists()]
+      if not missing_fonts:
+        return
+
+      process_script = fspath / "process.py"
+      if not process_script.exists():
+        cloudlog.warning(f"Missing font atlases {missing_fonts}, but no generator found at {process_script}")
+        return
+
+      cloudlog.warning(f"Generating missing font atlases: {missing_fonts}")
+      try:
+        subprocess.run([sys.executable, process_script.as_posix()], check=True, cwd=fspath.as_posix())
+      except Exception:
+        cloudlog.exception("Failed to generate font atlases")
 
   def _set_styles(self):
     rl.gui_set_style(rl.GuiControl.DEFAULT, rl.GuiControlProperty.BORDER_WIDTH, 0)

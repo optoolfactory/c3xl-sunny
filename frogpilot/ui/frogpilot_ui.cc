@@ -41,6 +41,23 @@ FrogPilotUIState::FrogPilotUIState(QObject *parent) : QObject(parent) {
     "liveParameters", "liveTorqueParameters", "liveTracks", "mapdExtendedOut", "mapdOut", "selfdriveState"
   });
 
+  // Provide sane local defaults until frogpilotPlan publishes real toggles.
+  frogpilot_scene.frogpilot_toggles = {
+    {"debug_mode", false},
+    {"driver_camera_in_reverse", false},
+    {"force_offroad", false},
+    {"force_onroad", false},
+    {"screen_brightness", 101},
+    {"screen_brightness_onroad", 101},
+    {"screen_timeout", 30},
+    {"screen_timeout_onroad", 10},
+    {"sidebar_color1", "#FFFFFFFF"},
+    {"sidebar_color2", "#FFFFFFFF"},
+    {"sidebar_color3", "#FFFFFFFF"},
+    {"standby_mode", false},
+    {"tethering_config", 0},
+  };
+
   wifi = new WifiManager(this);
 
   if (params.getInt("TetheringEnabled") == 1) {

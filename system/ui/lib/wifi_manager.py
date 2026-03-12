@@ -1,4 +1,5 @@
 import atexit
+import os
 import threading
 import time
 import uuid
@@ -36,6 +37,7 @@ TETHERING_IP_ADDRESS = "192.168.43.1"
 DEFAULT_TETHERING_PASSWORD = "swagswagcomma"
 SIGNAL_QUEUE_SIZE = 10
 SCAN_PERIOD_SECONDS = 5
+DESKTOP_FAKE_IP = "192.168.1.42"
 
 
 class SecurityType(IntEnum):
@@ -130,17 +132,18 @@ class WifiManager:
     self._networks: list[Network] = []  # a network can be comprised of multiple APs
     self._active = True  # used to not run when not in settings
     self._exit = False
+    self._fake_networking = False
 
     # DBus connections
     try:
       self._router_main = DBusRouter(open_dbus_connection_threading(bus="SYSTEM"))  # used by scanner / general method calls
       self._conn_monitor = open_dbus_connection_blocking(bus="SYSTEM")  # used by state monitor thread
       self._nm = DBusAddress(NM_PATH, bus_name=NM, interface=NM_IFACE)
-    except FileNotFoundError:
-      cloudlog.exception("Failed to connect to system D-Bus")
+    except Exception as e:
+      cloudlog.warning(f"Failed to connect to system D-Bus, enabling fake networking: {e}")
       self._router_main = None
       self._conn_monitor = None
-      self._exit = True
+      self._fake_networking = True
 
     # Store wifi device path
     self._wifi_device: str | None = None
@@ -154,12 +157,16 @@ class WifiManager:
 
     self._last_network_update: float = 0.0
     self._callback_queue: list[Callable] = []
+    self._fake_connected_ssid: str | None = None
+    self._fake_known_networks: dict[str, dict[str, Any]] = {}
 
     self._tethering_ssid = "weedle"
     if Params is not None:
       dongle_id = Params().get("DongleId")
       if dongle_id:
         self._tethering_ssid += "-" + dongle_id[:4]
+    if self._fake_networking:
+      self._init_fake_networking()
 
     # Callbacks
     self._need_auth: list[Callable[[str], None]] = []
@@ -176,6 +183,11 @@ class WifiManager:
 
   def _initialize(self):
     def worker():
+      if self._fake_networking:
+        self._update_networks()
+        cloudlog.debug("WifiManager initialized in fake networking mode")
+        return
+
       self._wait_for_wifi_device()
 
       self._scan_thread.start()
@@ -188,6 +200,51 @@ class WifiManager:
       cloudlog.debug("WifiManager initialized")
 
     threading.Thread(target=worker, daemon=True).start()
+
+  def _init_fake_networking(self):
+    primary_ssid = os.getenv("FAKE_WIFI_SSID", "Laptop Wi-Fi")
+    self._fake_known_networks = {
+      primary_ssid: {"security": SecurityType.WPA, "saved": True, "strength": 96},
+      "Coffee Shop": {"security": SecurityType.OPEN, "saved": False, "strength": 68},
+      "Phone Hotspot": {"security": SecurityType.WPA, "saved": False, "strength": 54},
+    }
+    self._fake_connected_ssid = primary_ssid
+    self._tethering_password = DEFAULT_TETHERING_PASSWORD
+    self._current_network_metered = MeteredType.NO
+    self._ipv4_address = DESKTOP_FAKE_IP
+
+  def _update_networks_fake(self):
+    with self._lock:
+      networks: list[Network] = []
+      for ssid, values in self._fake_known_networks.items():
+        networks.append(Network(
+          ssid=ssid,
+          strength=int(values["strength"]),
+          is_connected=ssid == self._fake_connected_ssid,
+          security_type=values["security"],
+          is_saved=bool(values["saved"]),
+        ))
+
+      if self._fake_connected_ssid == self._tethering_ssid:
+        if self._tethering_ssid not in self._fake_known_networks:
+          networks.append(Network(
+            ssid=self._tethering_ssid,
+            strength=100,
+            is_connected=True,
+            security_type=SecurityType.WPA,
+            is_saved=True,
+          ))
+        self._ipv4_address = TETHERING_IP_ADDRESS
+        self._current_network_metered = MeteredType.UNKNOWN
+      elif self._fake_connected_ssid is None:
+        self._ipv4_address = ""
+        self._current_network_metered = MeteredType.UNKNOWN
+      else:
+        self._ipv4_address = DESKTOP_FAKE_IP
+
+      networks.sort(key=lambda n: (-n.is_connected, -round(n.strength / 100 * 2), n.ssid.lower()))
+      self._networks = networks
+      self._enqueue_callbacks(self._networks_updated, self._networks)
 
   def add_callbacks(self, need_auth: Callable[[str], None] | None = None,
                     activated: Callable[[], None] | None = None,
@@ -229,6 +286,10 @@ class WifiManager:
 
   def set_active(self, active: bool):
     self._active = active
+    if self._fake_networking:
+      if active:
+        self._update_networks()
+      return
 
     # Scan immediately if we haven't scanned in a while
     if active and time.monotonic() - self._last_network_update > SCAN_PERIOD_SECONDS / 2:
@@ -374,6 +435,23 @@ class WifiManager:
     self._router_main.send_and_get_reply(new_method_call(settings_addr, 'AddConnection', 'a{sa{sv}}', (connection,)))
 
   def connect_to_network(self, ssid: str, password: str, hidden: bool = False):
+    if self._fake_networking:
+      def worker():
+        self._connecting_to_ssid = ssid
+        security = SecurityType.WPA if password else SecurityType.OPEN
+        if ssid not in self._fake_known_networks:
+          self._fake_known_networks[ssid] = {"security": security, "saved": True, "strength": 82}
+        else:
+          self._fake_known_networks[ssid]["saved"] = True
+          self._fake_known_networks[ssid]["security"] = security
+        self._fake_connected_ssid = ssid
+        self._connecting_to_ssid = ""
+        self._update_networks()
+        self._enqueue_callbacks(self._activated)
+
+      threading.Thread(target=worker, daemon=True).start()
+      return
+
     def worker():
       # Clear all connections that may already exist to the network we are connecting to
       self._connecting_to_ssid = ssid
@@ -412,6 +490,24 @@ class WifiManager:
     threading.Thread(target=worker, daemon=True).start()
 
   def forget_connection(self, ssid: str, block: bool = False):
+    if self._fake_networking:
+      def worker():
+        self._fake_known_networks.pop(ssid, None)
+        was_connected = self._fake_connected_ssid == ssid
+        if was_connected:
+          replacement = next((s for s in self._fake_known_networks.keys() if s != self._tethering_ssid), None)
+          self._fake_connected_ssid = replacement
+        self._update_networks()
+        self._enqueue_callbacks(self._forgotten)
+        if was_connected and self._fake_connected_ssid is None:
+          self._enqueue_callbacks(self._disconnected)
+
+      if block:
+        worker()
+      else:
+        threading.Thread(target=worker, daemon=True).start()
+      return
+
     def worker():
       conn_path = self._get_connections().get(ssid, None)
       if conn_path is not None:
@@ -428,6 +524,26 @@ class WifiManager:
       threading.Thread(target=worker, daemon=True).start()
 
   def activate_connection(self, ssid: str, block: bool = False):
+    if self._fake_networking:
+      def worker():
+        if ssid not in self._fake_known_networks and ssid != self._tethering_ssid:
+          return
+        self._connecting_to_ssid = ssid
+        if ssid == self._tethering_ssid and ssid not in self._fake_known_networks:
+          self._fake_known_networks[ssid] = {"security": SecurityType.WPA, "saved": True, "strength": 100}
+        else:
+          self._fake_known_networks[ssid]["saved"] = True
+        self._fake_connected_ssid = ssid
+        self._connecting_to_ssid = ""
+        self._update_networks()
+        self._enqueue_callbacks(self._activated)
+
+      if block:
+        worker()
+      else:
+        threading.Thread(target=worker, daemon=True).start()
+      return
+
     def worker():
       conn_path = self._get_connections().get(ssid, None)
       if conn_path is not None:
@@ -445,6 +561,13 @@ class WifiManager:
       threading.Thread(target=worker, daemon=True).start()
 
   def _deactivate_connection(self, ssid: str):
+    if self._fake_networking:
+      if self._fake_connected_ssid == ssid:
+        self._fake_connected_ssid = None
+        self._update_networks()
+        self._enqueue_callbacks(self._disconnected)
+      return
+
     for conn_path in self._get_active_connections():
       conn_addr = DBusAddress(conn_path, bus_name=NM, interface=NM_ACTIVE_CONNECTION_IFACE)
       specific_obj_path = self._router_main.send_and_get_reply(Properties(conn_addr).get('SpecificObject')).body[0][1]
@@ -464,6 +587,10 @@ class WifiManager:
     return False
 
   def set_tethering_password(self, password: str):
+    if self._fake_networking:
+      self._tethering_password = password
+      return
+
     def worker():
       conn_path = self._get_connections().get(self._tethering_ssid, None)
       if conn_path is None:
@@ -490,6 +617,9 @@ class WifiManager:
     threading.Thread(target=worker, daemon=True).start()
 
   def _get_tethering_password(self) -> str:
+    if self._fake_networking:
+      return self._tethering_password
+
     conn_path = self._get_connections().get(self._tethering_ssid, None)
     if conn_path is None:
       cloudlog.warning('No tethering connection found')
@@ -514,6 +644,21 @@ class WifiManager:
     self._ipv4_forward = enabled
 
   def set_tethering_active(self, active: bool):
+    if self._fake_networking:
+      def worker():
+        if active:
+          if self._tethering_ssid not in self._fake_known_networks:
+            self._fake_known_networks[self._tethering_ssid] = {"security": SecurityType.WPA, "saved": True, "strength": 100}
+          self._fake_connected_ssid = self._tethering_ssid
+        else:
+          if self._fake_connected_ssid == self._tethering_ssid:
+            replacement = next((s for s in self._fake_known_networks.keys() if s != self._tethering_ssid), None)
+            self._fake_connected_ssid = replacement
+        self._update_networks()
+
+      threading.Thread(target=worker, daemon=True).start()
+      return
+
     def worker():
       if active:
         self.activate_connection(self._tethering_ssid, block=True)
@@ -556,6 +701,11 @@ class WifiManager:
         return
 
   def set_current_network_metered(self, metered: MeteredType):
+    if self._fake_networking:
+      self._current_network_metered = metered
+      self._enqueue_callbacks(self._networks_updated, self._networks)
+      return
+
     def worker():
       for active_conn in self._get_active_connections():
         conn_addr = DBusAddress(active_conn, bus_name=NM, interface=NM_ACTIVE_CONNECTION_IFACE)
@@ -594,6 +744,10 @@ class WifiManager:
       cloudlog.warning(f"Failed to request scan: {reply}")
 
   def _update_networks(self):
+    if self._fake_networking:
+      self._update_networks_fake()
+      return
+
     with self._lock:
       if self._wifi_device is None:
         cloudlog.warning("No WiFi device found")
@@ -666,6 +820,8 @@ class WifiManager:
 
   def update_gsm_settings(self, roaming: bool, apn: str, metered: bool):
     """Update GSM settings for cellular connection"""
+    if self._fake_networking:
+      return
 
     def worker():
       try:

@@ -74,6 +74,11 @@ elif arch == "aarch64" and AGNOS:
   arch = "larch64"
 assert arch in ["larch64", "aarch64", "x86_64", "Darwin"]
 
+# Homebrew llvm can shadow Apple clang and break macOS SDK header resolution.
+# Use the system toolchain explicitly on macOS for reliable local builds.
+cc = '/usr/bin/clang' if arch == "Darwin" else 'clang'
+cxx = '/usr/bin/clang++' if arch == "Darwin" else 'clang++'
+
 lenv = {
   "PATH": os.environ['PATH'],
   "PYTHONPATH": Dir("#").abspath + ':' + Dir(f"#third_party/acados").abspath,
@@ -82,6 +87,11 @@ lenv = {
   "ACADOS_PYTHON_INTERFACE_PATH": Dir("#third_party/acados/acados_template").abspath,
   "TERA_PATH": Dir("#").abspath + f"/third_party/acados/{arch}/t_renderer"
 }
+
+# Allow callers to override cache/temp dirs used by subprocesses (e.g. tinygrad model compilation).
+for key in ("HOME", "TMPDIR", "XDG_CACHE_HOME", "CACHEDB"):
+  if key in os.environ:
+    lenv[key] = os.environ[key]
 
 rpath = []
 
@@ -181,8 +191,8 @@ env = Environment(
     "#msgq",
   ],
 
-  CC='clang',
-  CXX='clang++',
+  CC=cc,
+  CXX=cxx,
   LINKFLAGS=ldflags,
 
   RPATH=rpath,

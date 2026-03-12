@@ -288,4 +288,15 @@ void Sidebar::updateTheme() {
   loadImage("../../frogpilot/assets/active_theme/icons/button_home", home_img, home_gif, home_btn.size(), this);
   loadImage("../../frogpilot/assets/active_theme/icons/button_flag", flag_img, flag_gif, home_btn.size(), this);
   loadImage("../../frogpilot/assets/active_theme/icons/button_settings", settings_img, settings_gif, settings_btn.size(), this);
+
+  // Keep stock icons visible when a theme is partial or missing an icon.
+  if (!home_gif && home_img.isNull()) {
+    home_img = loadPixmap("../assets/images/button_home.png", home_btn.size());
+  }
+  if (!flag_gif && flag_img.isNull()) {
+    flag_img = loadPixmap("../assets/images/button_flag.png", home_btn.size());
+  }
+  if (!settings_gif && settings_img.isNull()) {
+    settings_img = loadPixmap("../assets/images/button_settings.png", settings_btn.size(), Qt::IgnoreAspectRatio);
+  }
 }
