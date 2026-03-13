@@ -134,7 +134,7 @@ elif TICI:
 procs += [
   PythonProcess("device_syncd", "frogpilot.system.device_syncd", always_run),
   PythonProcess("frogpilot_process", "frogpilot.frogpilot_process", always_run),
-  NativeProcess("mapd", "frogpilot/navigation", ["./mapd"], always_run),
+  #NativeProcess("mapd", "frogpilot/navigation", ["./mapd"], always_run),
   PythonProcess("speed_limit_filler", "frogpilot.system.speed_limit_filler", run_speed_limit_filler),
 ]
 
