@@ -21,9 +21,12 @@ from ..realtime.transports import CameraWsHub, RawWsHub
 from . import features
 from .config import WEB_DIR
 from .live_runtime.broker import RealtimeBroker
+from .services.auto_update import auto_update_loop
 from .services.git_status import git_status_loop
 from .services.heartbeat import heartbeat_loop
 from .services.params import HAS_PARAMS
+
+VISION_DIAG_UPLOAD_MAX_BYTES = 16 * 1024 * 1024
 
 
 # ===== request log middleware =====
@@ -72,11 +75,16 @@ async def on_startup(app: web.Application) -> None:
   except Exception as exc:
     app["realtime_broker"] = None
     app["realtime_broker_error"] = str(exc)
+  # Serializes broker.poll() across concurrent /api/live_runtime requests.
+  # SubMaster (msgq) is not thread-safe, so two parallel polls can crash it
+  # and take the whole server down.
+  app["realtime_broker_poll_lock"] = asyncio.Lock()
   app["realtime_camera_hub"] = CameraWsHub(messaging)
   app["realtime_raw_hub"] = RawWsHub(messaging)
   if HAS_PARAMS:
     app["hb_task"] = asyncio.create_task(heartbeat_loop(app))
   app["git_status_task"] = asyncio.create_task(git_status_loop())
+  app["auto_update_task"] = asyncio.create_task(auto_update_loop())
   asyncio.create_task(_malloc_trim_loop())
 
 
@@ -115,13 +123,23 @@ async def on_cleanup(app: web.Application) -> None:
     except Exception:
       pass
 
+  auto_update_task = app.get("auto_update_task")
+  if auto_update_task:
+    auto_update_task.cancel()
+    try:
+      await auto_update_task
+    except asyncio.CancelledError:
+      pass
+    except Exception:
+      pass
+
   sess = app.get("http")
   if sess:
     await sess.close()
 
 
 def make_app() -> web.Application:
-  app = web.Application(middlewares=[log_mw])
+  app = web.Application(middlewares=[log_mw], client_max_size=VISION_DIAG_UPLOAD_MAX_BYTES)
   app.on_startup.append(on_startup)
   app.on_cleanup.append(on_cleanup)
 
